@@ -1,0 +1,11 @@
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+__pycache__/
+*.pyc
+*.zip
+*.pem
+github-app-secret.json
