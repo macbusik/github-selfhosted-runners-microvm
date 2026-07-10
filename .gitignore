@@ -4,6 +4,7 @@
 *.tfvars
 !example.tfvars
 __pycache__/
+dispatcher/build/
 *.pyc
 *.zip
 *.pem

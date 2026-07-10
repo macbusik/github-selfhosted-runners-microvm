@@ -10,6 +10,9 @@ po zakończeniu joba.
   Secrets Manager (dane GitHub App), zasób `awscc_lambda_microvm_image`.
 - `runner-image/` - `Dockerfile` + `hook_server.py` (supervisor obsługujący
   hooki lifecycle AWS) + `requirements.txt`.
+- `dispatcher/` - `handler.py` + `build.sh` - Lambda przyjmująca webhook
+  `workflow_job` i wołająca `run-microvm` (infra w `terraform/dispatcher.tf`,
+  instrukcje w sekcji "Dispatcher" niżej).
 - `build-host/` - **osobny state Terraform**, jednorazowa maszyna EC2 do
   budowania/testowania obrazu z `runner-image/` bez instalowania Dockera
   lokalnie. Świadomie tymczasowe rozwiązanie - uzasadnienie i roadmapa
@@ -255,12 +258,78 @@ Po zakończeniu joba runner wyrejestrowuje się sam (`--ephemeral`), a
 `hook_server.py` woła `terminate-microvm` - `get-microvm` powinien pokazać
 przejście przez `TERMINATING` do `TERMINATED`.
 
+## Dispatcher - automatyczny trigger (webhook → run-microvm)
+
+Zamyka pętlę: job w kolejce GitHuba → świeży MicroVM, bez ręcznego
+`run-microvm`. Architektura: webhook `workflow_job` → **Lambda Function URL**
+(bez API Gateway - jedyną realną autoryzacją webhooka jest HMAC podpisu
+`X-Hub-Signature-256`, weryfikowany w `dispatcher/handler.py`; APIGW nie
+dodałby tu żadnej warstwy autoryzacji, a dodałby koszt) → `run-microvm`.
+
+Dispatcher odpala MicroVM tylko gdy: podpis HMAC się zgadza, event to
+`workflow_job` z akcją `queued`, repo się zgadza, a labele joba są
+**podzbiorem** labeli naszego runnera (dokładnie ta sama reguła, którą GitHub
+dobiera runnery do jobów - joby na `ubuntu-latest` nigdy nie matchują).
+
+### Deploy
+
+```bash
+./dispatcher/build.sh    # buduje dispatcher/dispatcher.zip (bundluje boto3!)
+cd terraform && terraform apply
+```
+
+`build.sh` bundluje boto3 do paczki zamiast polegać na boto3 z runtime'u
+Lambdy - runtime'owy potrafi nie znać `lambda-microvms` (ta sama klasa
+problemu co python3.9 w obrazie runnera, patrz `runner-image/Dockerfile`).
+Asercja modelu usługi jest częścią builda. Po zmianie `handler.py` /
+`requirements.txt`: ponownie `build.sh` + `apply`.
+
+### Sekret i webhook (jednorazowo, out-of-band)
+
+Ta sama wartość musi trafić do Secrets Managera i do konfiguracji webhooka:
+
+```bash
+cd terraform
+SECRET=$(openssl rand -hex 32)
+
+aws secretsmanager put-secret-value \
+  --secret-id "$(terraform output -raw dispatcher_webhook_secret_arn)" \
+  --secret-string "$SECRET" --region us-east-1
+
+gh api "repos/<owner>/<repo>/hooks" \
+  -f name=web -F active=true -f "events[]=workflow_job" \
+  -f "config[url]=$(terraform output -raw dispatcher_webhook_url)" \
+  -f "config[content_type]=json" \
+  -f "config[secret]=$SECRET"
+unset SECRET
+```
+
+GitHub od razu wysyła event `ping` - w repo → Settings → Webhooks → Recent
+Deliveries powinno być zielone `200 {"message": "pong"}`.
+
+### Test
+
+Zdispatchuj workflow z `runs-on: [self-hosted, microvm, ephemeral, linux,
+arm64]` - **bez ręcznego `run-microvm`**. Kolejność zdarzeń: delivery `queued`
+→ log `Launched microvm-...` w CloudWatch `/aws/lambda/gh-runner-microvm-dispatcher`
+→ runner online → job wykonany → self-terminate.
+
+### Świadome uproszczenia
+
+- **Redelivery / job anulowany w kolejce = jeden nadmiarowy MicroVM**, który
+  nigdy nie dostanie joba i żyje aż utnie go `maximum-duration`
+  (`var.dispatcher_max_duration_seconds`, domyślnie 4h - to jest realny
+  koszt pomyłki, skalibruj pod swoje joby). Bez stanu deduplikacji.
+- **Brak logiki kolejki/limitów współbieżności** - jeden `queued` = jeden
+  `run-microvm`. Quota konta na łączną pamięć RUNNING/SUSPENDED MicroVM-ów
+  jest naturalnym bezpiecznikiem.
+- **Rotacja sekretu webhooka** wymaga wymiany wartości w obu miejscach
+  (Secrets Manager + GitHub) i wygaśnięcia ciepłych środowisk Lambdy
+  (cache per-environment, komentarz w `handler.py`).
+
 ## Ograniczenia i rzeczy do zweryfikowania
 
 - **Tylko ARM64.** Workflow'y zależne od binariów x86 wymagają dostosowania.
-- **Brak automatycznego triggera.** MicroVM odpala się dziś ręcznie/CLI;
-  webhook `workflow_job` → dispatcher (Lambda + API Gateway) → `run-microvm`
-  to kolejny krok (poza zakresem tego commitu).
 - **Bug w providerze `awscc` dla pustych `Set(String)`.** Potwierdzone na
   żywo (2026-07): `additional_os_capabilities` i `egress_network_connectors`
   ustawione na `[]` są całkowicie pomijane w requeście `CreateResource`

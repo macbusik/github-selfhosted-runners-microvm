@@ -1,0 +1,7 @@
+# boto3 is bundled INTO the deployment zip on purpose - do not rely on the
+# boto3 baked into the Lambda runtime. It lags behind releases and can
+# predate the lambda-microvms service model entirely (exactly the failure
+# the runner image hit on Python 3.9 - see ../runner-image/Dockerfile).
+# build.sh asserts at build time that the resolved botocore knows the
+# lambda-microvms service.
+boto3>=1.34
