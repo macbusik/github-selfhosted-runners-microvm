@@ -97,17 +97,33 @@ data "aws_iam_policy_document" "dispatcher_permissions" {
   }
 
   statement {
+    # CONFIRMED (2026-07-10) kolejna nieudokumentowana akcja: RunMicrovm
+    # autoryzuje lambda:PassNetworkConnector na DOMYSLNYCH konektorach
+    # (HTTP_INGRESS/INTERNET_EGRESS), nawet gdy request zadnych nie podaje.
+    # Zawezone do konektorow zarzadzanych przez AWS (konto "aws" w ARN) -
+    # NIE obejmuje ewentualnych wlasnych konektorow VPC-egress; jesli kiedys
+    # dojdzie aws_lambda_network_connector, trzeba tu dodac jego ARN.
+    sid       = "PassManagedNetworkConnectors"
+    effect    = "Allow"
+    actions   = ["lambda:PassNetworkConnector"]
+    resources = ["arn:aws:lambda:${var.aws_region}:aws:network-connector:aws-network-connector:*"]
+  }
+
+  statement {
     # run-microvm z --execution-role-arn wymaga iam:PassRole na te role.
+    #
+    # CELOWO BEZ condition na iam:PassedToService: proba zawezenia do
+    # lambda.amazonaws.com konczyla sie AccessDenied (potwierdzone na zywo
+    # 2026-07-10) - kontekst autoryzacji RunMicrovm najwyrazniej nie niesie
+    # tej wartosci (ta sama klasa niespodzianek co autoryzacja Terminate
+    # wzgledem ARN-a obrazu). Brak warunku kompensuje trust policy samej
+    # execution role: przejac ja moze wylacznie lambda.amazonaws.com, wiec
+    # "przekazanie gdzie indziej" i tak jest niewykonalne. Do ponownego
+    # zawezenia, gdy AWS udokumentuje wartosc PassedToService dla MicroVMs.
     sid       = "PassExecutionRole"
     effect    = "Allow"
     actions   = ["iam:PassRole"]
     resources = [aws_iam_role.microvm_execution_role.arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values   = ["lambda.amazonaws.com"]
-    }
   }
 }
 
