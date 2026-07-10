@@ -63,9 +63,22 @@ RUNNER_LABELS = os.environ.get("RUNNER_LABELS", "self-hosted,microvm,ephemeral,l
 RUNNER_HOME = "/home/runner/actions-runner"
 GITHUB_API = "https://api.github.com"
 
+# Region handling has churned during the service's first weeks:
+#   - 2026-07-06 (confirmed live): MicroVMs did NOT auto-inject
+#     AWS_REGION/AWS_DEFAULT_REGION, so boto3 raised NoRegionError unless the
+#     image set AWS_REGION as an env var (the console accepted that key).
+#   - 2026-07-09 (confirmed live): CreateMicrovmImage now REJECTS AWS_REGION
+#     as a reserved env var key - which implies the platform injects it
+#     itself now, but that isn't documented anywhere we could verify.
+# So: prefer platform-provided AWS_REGION if present, fall back to our own
+# MICROVM_AWS_REGION baked into the image (see ../terraform/main.tf). This
+# stays correct in both worlds and never depends on undocumented injection.
+AWS_REGION = os.environ.get("AWS_REGION") or os.environ["MICROVM_AWS_REGION"]
+
 _state_lock = threading.Lock()
 _runner_process = None
 _microvm_id = None
+_run_started = False
 
 
 def _read_github_app_secret():
@@ -75,7 +88,7 @@ def _read_github_app_secret():
     no static credentials are ever placed in the image or in environment
     variables.
     """
-    client = boto3.client("secretsmanager")
+    client = boto3.client("secretsmanager", region_name=AWS_REGION)
     resp = client.get_secret_value(SecretId=GH_APP_SECRET_ARN)
     return json.loads(resp["SecretString"])
 
@@ -114,7 +127,7 @@ def _self_terminate():
         log.warning("No microvmId known, skipping self-terminate call")
         return
     try:
-        client = boto3.client("lambda-microvms")
+        client = boto3.client("lambda-microvms", region_name=AWS_REGION)
         client.terminate_microvm(microvmIdentifier=_microvm_id)
         log.info("Called terminate-microvm for %s", _microvm_id)
     except Exception:
@@ -139,38 +152,63 @@ def _run_job_and_terminate(runner_name):
 
 
 def _configure_and_launch(microvm_id, run_hook_payload):
-    global _microvm_id
-    _microvm_id = microvm_id
-    suffix = microvm_id[-12:] if microvm_id else uuid.uuid4().hex[:12]
-    runner_name = f"microvm-{suffix}"
+    global _microvm_id, _run_started
+    # AWS should only ever deliver /run once per MicroVM, but a duplicate
+    # delivery (or a stray manual POST) would register a second runner and
+    # clobber _microvm_id - make the launch strictly once-only.
+    with _state_lock:
+        if _run_started:
+            log.warning("Duplicate /run call ignored - runner already started")
+            return
+        _run_started = True
+        _microvm_id = microvm_id
 
-    secret = _read_github_app_secret()
-    installation_token = _mint_installation_token(
-        secret["app_id"], secret["installation_id"], secret["private_key"]
-    )
-    reg_token = _mint_runner_registration_token(installation_token)
+    try:
+        suffix = microvm_id[-12:] if microvm_id else uuid.uuid4().hex[:12]
+        runner_name = f"microvm-{suffix}"
 
-    config_sh = os.path.join(RUNNER_HOME, "config.sh")
-    subprocess.run(
-        [
-            config_sh,
-            "--unattended",
-            "--ephemeral",
-            "--replace",
-            "--url", f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}",
-            "--token", reg_token,
-            "--name", runner_name,
-            "--labels", RUNNER_LABELS,
-            "--work", "_work",
-        ],
-        cwd=RUNNER_HOME,
-        check=True,
-    )
+        # Step-by-step INFO logs: log shipping from a MicroVM that fails /run
+        # is best-effort (the VM is torn down immediately on a non-200), so
+        # the last line that made it out is often the only clue where it died.
+        log.info("Fetching GitHub App secret from Secrets Manager")
+        secret = _read_github_app_secret()
+        log.info("Secret fetched, minting installation token via GitHub API")
+        installation_token = _mint_installation_token(
+            secret["app_id"], secret["installation_id"], secret["private_key"]
+        )
+        log.info("Installation token OK, minting runner registration token")
+        reg_token = _mint_runner_registration_token(installation_token)
+        log.info("Registration token OK, running config.sh for %s", runner_name)
 
-    # The job itself can run for a long time (up to the MicroVM's
-    # maximum-duration-in-seconds); do this in the background so the /run
-    # hook response below isn't held open for the whole job.
-    threading.Thread(target=_run_job_and_terminate, args=(runner_name,), daemon=True).start()
+        config_sh = os.path.join(RUNNER_HOME, "config.sh")
+        subprocess.run(
+            [
+                config_sh,
+                "--unattended",
+                "--ephemeral",
+                "--replace",
+                "--url", f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}",
+                "--token", reg_token,
+                "--name", runner_name,
+                "--labels", RUNNER_LABELS,
+                "--work", "_work",
+            ],
+            cwd=RUNNER_HOME,
+            check=True,
+        )
+
+        log.info("config.sh done, starting runner process in the background")
+
+        # The job itself can run for a long time (up to the MicroVM's
+        # maximum-duration-in-seconds); do this in the background so the /run
+        # hook response below isn't held open for the whole job.
+        threading.Thread(target=_run_job_and_terminate, args=(runner_name,), daemon=True).start()
+    except Exception:
+        # A failed launch responds 500 and AWS terminates the MicroVM, but
+        # don't leave the guard set in case /run is ever retried instead.
+        with _state_lock:
+            _run_started = False
+        raise
 
 
 class HookHandler(BaseHTTPRequestHandler):

@@ -34,6 +34,32 @@ variable "runner_labels" {
   default     = "self-hosted,microvm,ephemeral,linux,arm64"
 }
 
+variable "base_image_version" {
+  description = <<-EOT
+    Version identifier of the arn:aws:lambda:<region>:aws:microvm-image:al2023-1
+    base image. Cannot be empty - Lambda MicroVMs rejects "" ("latest" is not
+    a valid value here, unlike --base-image-version being omitted in the CLI).
+    Look up the current AVAILABLE version with:
+      aws lambda-microvms list-managed-microvm-image-versions \
+        --image-identifier arn:aws:lambda:<region>:aws:microvm-image:al2023-1
+  EOT
+  type        = string
+}
+
+variable "github_app_secret_name" {
+  description = <<-EOT
+    Override for the Secrets Manager secret name. By default the name is
+    derived as <name_prefix>/<github_owner>-<github_repo>/github-app. Set this
+    only to pin a pre-existing secret whose name doesn't match the derived
+    pattern - renaming a secret forces destroy+create in Terraform, which
+    would wipe the stored GitHub App credentials (populated out-of-band) and
+    orphan any MicroVM image that has the old secret ARN baked into its
+    environment variables.
+  EOT
+  type        = string
+  default     = null
+}
+
 variable "runner_image_baseline_memory_mib" {
   description = "Baseline memory (MiB) for the MicroVM. vCPU scales proportionally with memory (2048 MiB = 1 vCPU). Can burst to 4x baseline. Valid steps: 512, 1024, 2048, 4096, 8192."
   type        = number

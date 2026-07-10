@@ -1,5 +1,4 @@
 .terraform/
-.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfvars
@@ -8,4 +7,6 @@ __pycache__/
 *.pyc
 *.zip
 *.pem
+*.pkg
+.DS_Store
 github-app-secret.json
