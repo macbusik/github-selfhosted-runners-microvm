@@ -21,6 +21,16 @@ output "artifact_bucket" {
   value = aws_s3_bucket.runner_artifacts.bucket
 }
 
+output "dispatcher_webhook_url" {
+  description = "Payload URL webhooka GitHub (workflow_job, content type application/json). Chroniony HMAC-iem - patrz dispatcher_webhook_secret_arn."
+  value       = aws_lambda_function_url.dispatcher.function_url
+}
+
+output "dispatcher_webhook_secret_arn" {
+  description = "Uzupelnij TA SAMA wartoscia, ktora podasz jako secret webhooka w GitHub - patrz ../README.md, sekcja Dispatcher."
+  value       = aws_secretsmanager_secret.webhook.arn
+}
+
 output "run_microvm_example_command" {
   # CONFIRMED (2026-07-10): passing the NO_INGRESS connector ARN makes
   # RunMicrovm fail with 403 "Unable to determine service/operation name to

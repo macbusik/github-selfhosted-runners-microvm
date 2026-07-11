@@ -60,6 +60,18 @@ variable "github_app_secret_name" {
   default     = null
 }
 
+variable "dispatcher_max_duration_seconds" {
+  description = <<-EOT
+    maximum-duration-in-seconds dla MicroVM-ow odpalanych przez dispatcher.
+    To takze siatka bezpieczenstwa na "osierocone" VM-y (redelivery webhooka,
+    job anulowany w kolejce): taki VM nigdy nie dostanie joba i zyje az do
+    tego limitu. Krotszy limit = mniejszy koszt pomylki, ale tez maksymalny
+    czas trwania joba.
+  EOT
+  type        = number
+  default     = 14400
+}
+
 variable "runner_image_baseline_memory_mib" {
   description = "Baseline memory (MiB) for the MicroVM. vCPU scales proportionally with memory (2048 MiB = 1 vCPU). Can burst to 4x baseline. Valid steps: 512, 1024, 2048, 4096, 8192."
   type        = number

@@ -53,6 +53,23 @@
 > działają, następny krok z sekcji "Ograniczenia" w README to dispatcher
 > (webhook `workflow_job` → `run-microvm`).
 
+> **UPDATE 2026-07-10 (późny wieczór): DISPATCHER DZIAŁA E2E.**
+> Webhook `workflow_job` → Lambda Function URL → `run-microvm`: od
+> `gh workflow run` do wykonanego joba i s-terminowanego VM w ~75 s, zero
+> kroków ręcznych. Szczegóły w README (sekcja "Dispatcher"). Dwa nowe
+> odkrycia autoryzacyjne z debugowania (oba naprawione w
+> `terraform/dispatcher.tf`, komentarze przy statementach):
+> - `iam:PassRole` z warunkiem `iam:PassedToService=lambda.amazonaws.com`
+>   dostaje AccessDenied - kontekst RunMicrovm nie niesie tej wartości;
+>   warunek usunięty (kompensuje trust policy samej execution role).
+> - `RunMicrovm` wymaga też **`lambda:PassNetworkConnector`** na domyślnych
+>   konektorach (HTTP_INGRESS/INTERNET_EGRESS), nawet gdy request żadnych
+>   nie podaje - akcja nieudokumentowana, odkryta przez AccessDenied.
+> Operacyjna pułapka: **GitHub nie retry'uje nieudanych deliveries** - job,
+> którego `queued` dostało 5xx, wisi w kolejce na zawsze; po naprawie
+> przyczyny trzeba delivery ponowić ręcznie (Redeliver) albo anulować run
+> i puścić nowy. Plus propagacja zmian IAM potrafi zjeść ~minutę.
+
 Ten dokument to migawka po sesji debugowania, w której po raz pierwszy
 przeszliśmy pełny happy path (ręcznie, przez shell w MicroVM). Kod w repo
 (`terraform/main.tf`, `runner-image/Dockerfile`, `runner-image/hook_server.py`,
