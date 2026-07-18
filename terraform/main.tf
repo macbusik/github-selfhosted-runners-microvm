@@ -6,7 +6,12 @@ locals {
   # The generation segment enables blue/green image rollovers: bumping
   # var.image_generation gives the replacement image a fresh name so it can
   # coexist with the previous one during burn-in (MIGRATION_PLAN.md, Phase 3/4).
-  image_name     = "${var.name_prefix}-${var.github_repo}-${var.image_generation}"
+  # image_family (no generation) is what IAM patterns are scoped to: during
+  # burn-in, MicroVMs of the OLD generation still use the same execution role,
+  # so log + self-terminate permissions must cover every generation, not just
+  # the current one.
+  image_family   = "${var.name_prefix}-${var.github_repo}"
+  image_name     = "${local.image_family}-${var.image_generation}"
   secret_name    = coalesce(var.github_app_secret_name, "${var.name_prefix}/${var.github_owner}-${var.github_repo}/github-app")
   base_image_arn = "arn:aws:lambda:${var.aws_region}:aws:microvm-image:al2023-1"
 
@@ -19,7 +24,7 @@ locals {
   # logged - looks like the build never started (no log stream whatsoever),
   # not like a permissions error. If AWS fixes the docs/path back to match
   # the prose, this is the line to revert.
-  log_group_arn_prefix = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda-microvms/${local.image_name}*"
+  log_group_arn_prefix = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda-microvms/${local.image_family}*"
 }
 
 # ---------------------------------------------------------------------------
@@ -140,7 +145,9 @@ data "aws_iam_policy_document" "microvm_execution_permissions" {
     effect  = "Allow"
     actions = ["lambda:TerminateMicrovm", "lambda:GetMicrovm"]
     resources = [
-      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.image_name}",
+      # image_family wildcard, not image_name: during a blue/green rollover
+      # MicroVMs of the previous generation still need to self-terminate.
+      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.image_family}*",
       "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:microvm:*",
     ]
   }
