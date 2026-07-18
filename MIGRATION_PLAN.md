@@ -341,9 +341,17 @@ re-run the spike each awscc/handler release.
   the old image *after* the state operation below.
 
 ### Phase 3 — Cutover (production, quiet window)
+0. Set `base_image_version = "0"` (not `"0.0"`) in `terraform.tfvars` —
+   Phase 1 discovered the CFN handler rejects the normalized form the old
+   import path required; the new variable validation enforces this.
 1. Detach the old image from Terraform without destroying it (it stays as
    the rollback target):
    `terraform state rm awscc_lambda_microvm_image.gh_runner`
+   Note (observed live): running `terraform init` *before* this step
+   installs the awscc provider again — init resolves providers for
+   resources still in state, not just in config — and appends it to
+   `.terraform.lock.hcl`. Harmless; discard that lockfile change after the
+   `state rm` instead of committing it.
 2. `terraform apply` (two operators: one executes, one verifies the plan
    matches the PR-attached plan — standard four-eyes).
 3. Wait for the stack `CREATE_COMPLETE` and the image `AVAILABLE`.
