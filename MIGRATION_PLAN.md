@@ -31,9 +31,21 @@
 >   microvm_image` → new `-g2` image), **3 to change in-place** (both IAM
 >   role policies + dispatcher env), **0 to destroy** — old image untouched,
 >   attached to the Phase 2 PR.
-> - **Phases 3–4 — not started.** Cutover checklist in §3; remember
->   `terraform state rm awscc_lambda_microvm_image.gh_runner` *before* the
->   apply.
+> - **Phase 3 — DONE 2026-07-18.** State backed up, tfvars set to
+>   `base_image_version = "0"`, old awscc resource `state rm`'d (not
+>   destroyed), apply matched the PR plan exactly (1 add / 3 change /
+>   0 destroy). New image
+>   `...:microvm-image:gh-runner-microvm-sample-cicd-repo-g2` is `CREATED`
+>   (active version 1.0); dispatcher env and IAM point at it. **E2E green**:
+>   workflow_dispatch → webhook → dispatcher `Launched microvm-980c0ea6-...`
+>   → job `hello` succeeded on the g2 runner → MicroVM self-terminated
+>   (`TERMINATED` confirmed).
+> - **Phase 4 — burn-in in progress.** Old image
+>   `...:microvm-image:gh-runner-microvm-sample-cicd-repo` retained as the
+>   rollback target. After the burn-in window, decommission with:
+>   `aws lambda-microvms delete-microvm-image --image-identifier
+>   arn:aws:lambda:us-east-1:191138354216:microvm-image:gh-runner-microvm-sample-cicd-repo`
+>   (check for running MicroVMs first).
 
 **Scope:** replace the single `awscc` resource in this repo —
 `awscc_lambda_microvm_image.gh_runner` ([terraform/main.tf](terraform/main.tf)) —
