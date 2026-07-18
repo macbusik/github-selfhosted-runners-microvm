@@ -1,5 +1,40 @@
 # Migration plan: `awscc` provider → CloudFormation
 
+> **Execution status (2026-07-18):**
+> - **Phase 0 — done.** Local state backed up to
+>   `terraform/terraform.tfstate.pre-cfn-migration-2026-07-18.backup`
+>   (primary worktree, not committed). Old image ARN recorded:
+>   `arn:aws:lambda:us-east-1:191138354216:microvm-image:gh-runner-microvm-sample-cicd-repo`.
+> - **Phase 1 — PASSED 2026-07-18 (verdict: GO).** Full cycle exercised live
+>   against a throwaway stack: create → image `CREATED` with
+>   `latestActiveImageVersion 1.0` and config integrity verified via
+>   `list-microvm-image-versions` (hooks/timeouts/memory/egress all match);
+>   description-only UpdateStack → version 2.0 with **hooks intact** (the
+>   community-reported hook-loss bug did not reproduce); delete-stack →
+>   image confirmed gone (`ResourceNotFoundException`). Findings:
+>   1. Schema check passed: every property name in the template matches
+>      `describe-type` output (incl. `MinimumMemoryInMiB`); `Name` is
+>      confirmed createOnly (name change = replacement, as designed).
+>   2. **Variant A is mandatory, variant B is invalid**: the registry schema
+>      marks `AdditionalOsCapabilities`/`EgressNetworkConnectors` (and
+>      `Description`, `Logging`, `Hooks`, `EnvironmentVariables`) as
+>      *required* — that is the root cause of the awscc "required key not
+>      found" error. Explicit `[]` in the template is accepted (create
+>      confirmed live).
+>   3. **New contract discovered**: the CFN handler wants `BaseImageVersion`
+>      as a single major version number (`0`) and rejects the API-normalized
+>      `0.0` the old import path required. Template + variable now enforce
+>      this; `terraform.tfvars` must change `"0.0"` → `"0"` at cutover.
+> - **Phase 2 — done.** `terraform validate` passes. Preview `terraform plan`
+>   generated against a copy of the real state (after `state rm` of the awscc
+>   resource on the copy only): **1 to add** (`aws_cloudformation_stack.
+>   microvm_image` → new `-g2` image), **3 to change in-place** (both IAM
+>   role policies + dispatcher env), **0 to destroy** — old image untouched,
+>   attached to the Phase 2 PR.
+> - **Phases 3–4 — not started.** Cutover checklist in §3; remember
+>   `terraform state rm awscc_lambda_microvm_image.gh_runner` *before* the
+>   apply.
+
 **Scope:** replace the single `awscc` resource in this repo —
 `awscc_lambda_microvm_image.gh_runner` ([terraform/main.tf](terraform/main.tf)) —
 with a CloudFormation-managed equivalent, and drop the `awscc` provider
@@ -306,9 +341,17 @@ re-run the spike each awscc/handler release.
   the old image *after* the state operation below.
 
 ### Phase 3 — Cutover (production, quiet window)
+0. Set `base_image_version = "0"` (not `"0.0"`) in `terraform.tfvars` —
+   Phase 1 discovered the CFN handler rejects the normalized form the old
+   import path required; the new variable validation enforces this.
 1. Detach the old image from Terraform without destroying it (it stays as
    the rollback target):
    `terraform state rm awscc_lambda_microvm_image.gh_runner`
+   Note (observed live): running `terraform init` *before* this step
+   installs the awscc provider again — init resolves providers for
+   resources still in state, not just in config — and appends it to
+   `.terraform.lock.hcl`. Harmless; discard that lockfile change after the
+   `state rm` instead of committing it.
 2. `terraform apply` (two operators: one executes, one verifies the plan
    matches the PR-attached plan — standard four-eyes).
 3. Wait for the stack `CREATE_COMPLETE` and the image `AVAILABLE`.

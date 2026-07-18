@@ -7,7 +7,9 @@ po zakończeniu joba.
 ## Struktura repo
 
 - `terraform/` - S3 (artefakt obrazu), IAM (build role + execution role),
-  Secrets Manager (dane GitHub App), zasób `awscc_lambda_microvm_image`.
+  Secrets Manager (dane GitHub App), obraz MicroVM zarządzany przez
+  CloudFormation (`aws_cloudformation_stack` + `templates/microvm-image.yaml`;
+  dlaczego nie provider `awscc` - patrz `MIGRATION_PLAN.md`).
 - `runner-image/` - `Dockerfile` + `hook_server.py` (supervisor obsługujący
   hooki lifecycle AWS) + `requirements.txt`.
 - `dispatcher/` - `handler.py` + `build.sh` - Lambda przyjmująca webhook
@@ -35,8 +37,9 @@ Szczegółowe uzasadnienie decyzji projektowych jest w komentarzach na górze
 
 - Region AWS: `us-east-1`, `us-east-2`, `us-west-2`, `eu-west-1` lub
   `ap-northeast-1` (jedyne wspierane przez Lambda MicroVMs na start, 2026-06).
-- Terraform >= 1.7, provider `hashicorp/aws` >= 5.60, `hashicorp/awscc` >= 1.90.0
-  (zasób `awscc_lambda_microvm_image` istnieje dopiero od 1.90.0, 2026-06-24).
+- Terraform >= 1.7, provider `hashicorp/aws` >= 5.60 (provider `awscc` nie
+  jest już wymagany - obraz MicroVM przeszedł na CloudFormation, patrz
+  `MIGRATION_PLAN.md`).
 - AWS CLI >= 2.35.10 - pierwsza wersja z komendami `aws lambda-microvms`
   (ale patrz `STATUS.md` sekcja 3: część operacji CLI jest dziś zablokowana
   po stronie AWS niezależnie od wersji).
@@ -57,9 +60,9 @@ Szczegółowe uzasadnienie decyzji projektowych jest w komentarzach na górze
 
 ## Wdrożenie - trzy fazy
 
-Obraz MicroVM (`awscc_lambda_microvm_image`) odwołuje się do pliku w S3, który
-musi już istnieć w chwili `terraform apply` - stąd rozbicie na fazy zamiast
-jednego `apply`.
+Obraz MicroVM (stack CloudFormation z `templates/microvm-image.yaml`) odwołuje
+się do pliku w S3, który musi już istnieć w chwili `terraform apply` - stąd
+rozbicie na fazy zamiast jednego `apply`.
 
 ### Faza 1 - infrastruktura bazowa (S3, IAM, kontener sekretu)
 
@@ -153,89 +156,46 @@ oszczędza emulację QEMU.
 
 ### Faza 2 - obraz MicroVM
 
-> **Stan 2026-07 (szczegóły: `STATUS.md`, sekcja 3):** w okolicach premiery
-> ścieżka CLI była zablokowana po stronie AWS - `create-microvm-image` /
-> `list-microvm-images` zwracały 403 "Unable to determine service/operation
-> name to be authorized" w każdym regionie, niezależnie od uprawnień IAM, i
-> obraz trzeba było tworzyć **przez konsolę** (checklista pól w `STATUS.md`,
-> sekcja 2, punkt 3). **Update 2026-07-09:** operacje odczytu
-> (`list-microvm-images`, `get-microvm-image`) już działają - AWS najwyraźniej
-> dopiął rollout API. `create-microvm-image` niezweryfikowane od tego czasu -
-> spróbuj ścieżki CLI poniżej, a konsolę traktuj jako fallback.
-
-**Ten zasób nie powstaje przez `terraform apply`.** `awscc_lambda_microvm_image`
-ma potwierdzony bug w providerze (2026-07, ta sama klasa co
-[issue #847](https://github.com/hashicorp/terraform-provider-awscc/issues/847)):
-puste atrybuty `Set(String)` (`additional_os_capabilities`,
-`egress_network_connectors`) są całkowicie pomijane w requeście do Cloud
-Control zamiast wysłane jako `[]`, a Cloud Control odrzuca to jako "required
-key not found". Jedyna niepusta wartość `additional_os_capabilities` to
-`["ALL"]` (podniesione uprawnienia w VM), czego nie chcemy nadawać bez
-potrzeby - więc zamiast to obchodzić w HCL, tworzymy zasób przez CLI i
-wciągamy go do stanu Terraform:
-
-Zasób obrazu jeszcze nie istnieje w stanie, więc `microvm_image_arn` z outputu
-nie zadziała na tym etapie - nazwę i ARN base image bierzemy przez
-`terraform console` (odczytuje `locals`/`var` bez potrzeby istnienia zasobu),
-a bucket i build role z outputów Fazy 1 (te już istnieją):
-
-Wywołanie musi zawierać **wszystko, co ustawia HCL** (env vars, hooki, CPU,
-pamięć, tagi) - inaczej po imporcie `terraform plan` zobaczy różnice.
-Zweryfikowane na żywo (2026-07-09): przy podanym porcie hooków API wymaga
-jawnego włączenia co najmniej jednego hooka, a klucz env `AWS_REGION` jest
-zarezerwowany (stąd `MICROVM_AWS_REGION`, patrz komentarz w `main.tf`).
-Najprościej przez `--cli-input-json`:
+Obraz powstaje przez **zwykłe `terraform apply`** - Terraform tworzy stack
+CloudFormation (`aws_cloudformation_stack.microvm_image` w `main.tf`), a
+CloudFormation woła `CreateMicrovmImage` przez handler z rejestru. Historia:
+wcześniej obraz trzeba było tworzyć przez CLI i `terraform import`, bo
+provider `awscc` ma potwierdzony bug z pustymi `Set(String)` (klasa
+[issue #847](https://github.com/hashicorp/terraform-provider-awscc/issues/847))
+plus read handler zwracający `null` dla prawie wszystkich pól - pełna
+historia i uzasadnienie migracji w `MIGRATION_PLAN.md`.
 
 ```bash
-IMAGE_NAME=$(terraform console <<< 'local.image_name' | tr -d '"')
-BASE_IMAGE_ARN=$(terraform console <<< 'local.base_image_arn' | tr -d '"')
-BASE_IMAGE_VERSION=$(terraform console <<< 'var.base_image_version' | tr -d '"')
+# base_image_version musi być realną wersją (pusty string jest odrzucany).
+# UWAGA na format (potwierdzone 2026-07-18): handler CloudFormation chce
+# POJEDYNCZEGO numeru wersji głównej ("0"), a odrzuca znormalizowaną formę
+# "0.0", której wymagała stara ścieżka awscc/import.
+aws lambda-microvms list-managed-microvm-image-versions \
+  --image-identifier arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1
 
-cat > /tmp/create-image.json <<EOF
-{
-  "name": "$IMAGE_NAME",
-  "description": "Ephemeral GitHub Actions self-hosted runner for <owner>/<repo>",
-  "codeArtifact": { "uri": "s3://$(terraform output -raw artifact_bucket)/gh-runner-image.zip" },
-  "baseImageArn": "$BASE_IMAGE_ARN",
-  "baseImageVersion": "$BASE_IMAGE_VERSION",
-  "buildRoleArn": "$(terraform output -raw build_role_arn)",
-  "cpuConfigurations": [{ "architecture": "ARM_64" }],
-  "resources": [{ "minimumMemoryInMiB": 2048 }],
-  "hooks": {
-    "port": 8080,
-    "microvmImageHooks": { "ready": "ENABLED", "validate": "ENABLED" },
-    "microvmHooks": { "run": "ENABLED", "terminate": "ENABLED" }
-  },
-  "environmentVariables": {
-    "GITHUB_OWNER": "<owner>",
-    "GITHUB_REPO": "<repo>",
-    "GH_APP_SECRET_ARN": "$(terraform output -raw github_app_secret_arn)",
-    "RUNNER_LABELS": "self-hosted,microvm,ephemeral,linux,arm64",
-    "HOOK_PORT": "8080",
-    "MICROVM_AWS_REGION": "us-east-1"
-  },
-  "tags": { "Project": "gh-runner-microvm" }
-}
-EOF
+terraform apply -var="base_image_version=0"   # + owner/repo
 
-aws lambda-microvms create-microvm-image \
-  --cli-input-json file:///tmp/create-image.json --region us-east-1
-# Celowo BEZ additionalOsCapabilities i egressNetworkConnectors - serwis sam
-# ustawia domyślne (brak podniesionych uprawnień, INTERNET_EGRESS), a
-# lifecycle.ignore_changes w main.tf pilnuje, żeby Terraform ich nie ruszał.
-
-aws lambda-microvms get-microvm-image --image-identifier <arn ze stdout powyżej>
-# poczekaj na state: CREATED
-
-terraform import awscc_lambda_microvm_image.gh_runner <image-arn>
-terraform plan   # powinien wyjść "No changes" albo tylko kosmetyczne pola
+terraform output microvm_image_arn
+aws lambda-microvms get-microvm-image \
+  --image-identifier "$(terraform output -raw microvm_image_arn)"
+# poczekaj na state: CREATED / AVAILABLE
 ```
 
-`main.tf` ma już `lifecycle.ignore_changes` na oba problematyczne pola, więc
-kolejne `terraform apply` (np. po zmianie `code_artifact`) nie będzie
-próbował ich "naprawiać" i nie trafi w ten sam bug przy `UpdateResource`.
-Jeśli `terraform init -upgrade` kiedyś podciągnie łatkę na ten bug, można
-wrócić do zwykłego `terraform apply` i usunąć `ignore_changes`.
+Zasady po migracji:
+
+- **Zmiana obrazu = nowa generacja.** Po zmianie artefaktu (`gh-runner-image.zip`),
+  env vars czy hooków podbij `var.image_generation` (`g2` → `g3`): zmiana
+  nazwy to *replacement* w CloudFormation (nowy obraz buduje się obok,
+  stary jest kasowany w kroku cleanup). Celowo nie robimy in-place
+  `UpdateMicrovmImage` - są doniesienia o gubieniu hooków przy update.
+- **`AdditionalOsCapabilities: []` / `EgressNetworkConnectors: []`** są w
+  szablonie jawnie (wariant A z `MIGRATION_PLAN.md`, Faza 1 spike). Jeśli
+  create padnie z "required key not found", usuń te dwie linie z
+  `templates/microvm-image.yaml` (wariant B - dokładnie to robi działająca
+  ścieżka CLI) i zgłoś wynik spike'a w `MIGRATION_PLAN.md`.
+- **Drift detection CloudFormation jest niewiarygodny** dla tego zasobu,
+  dopóki AWS nie naprawi read handlera (zwraca `null` poza name/arn/tags) -
+  kontrola kompensacyjna w `MIGRATION_PLAN.md` §6.
 
 Logi builda: CloudWatch `/aws/lambda-microvms/<image_name>` - uwaga, jeden
 segment z myślnikiem; ścieżka `/aws/lambda/microvms/...` z dokumentacji AWS
@@ -330,26 +290,28 @@ arm64]` - **bez ręcznego `run-microvm`**. Kolejność zdarzeń: delivery `queue
 ## Ograniczenia i rzeczy do zweryfikowania
 
 - **Tylko ARM64.** Workflow'y zależne od binariów x86 wymagają dostosowania.
-- **Bug w providerze `awscc` dla pustych `Set(String)`.** Potwierdzone na
-  żywo (2026-07): `additional_os_capabilities` i `egress_network_connectors`
-  ustawione na `[]` są całkowicie pomijane w requeście `CreateResource`
-  zamiast wysłane jako `[]`, co Cloud Control odrzuca jako "required key not
-  found" (ta sama klasa co
-  [terraform-provider-awscc#847](https://github.com/hashicorp/terraform-provider-awscc/issues/847)).
-  Obejście: obraz tworzony jest przez `aws lambda-microvms create-microvm-image`
-  (CLI poprawnie pomija te pola) i wciągany do stanu przez `terraform import`
-  - patrz "Faza 2" wyżej. `main.tf` ma `lifecycle.ignore_changes` na oba pola,
-  żeby kolejny `apply` nie próbował ich "naprawić" tym samym zepsutym
-  `UpdateResource`.
+- **Provider `awscc` usunięty (2026-07).** Miał dwa potwierdzone na żywo
+  defekty dla `awscc_lambda_microvm_image`: puste `Set(String)` pomijane w
+  requeście zamiast wysłane jako `[]` (klasa
+  [terraform-provider-awscc#847](https://github.com/hashicorp/terraform-provider-awscc/issues/847),
+  Cloud Control odrzuca to jako "required key not found") oraz read handler
+  zwracający `null` dla wszystkiego poza name/arn/tags (wieczny drift bez
+  `ignore_changes` na całości). Obraz jest teraz zarządzany przez
+  CloudFormation - pełny plan migracji, ryzyka i rollback w
+  `MIGRATION_PLAN.md`. Uwaga: CloudFormation używa tego samego handlera co
+  Cloud Control, więc read-handlerowy defekt objawia się dalej jako
+  niewiarygodny drift detection (kompensacja: §6 planu).
 - **`base_image_version` musi być realną wersją, nie pustym stringiem** -
   odczytaj przez `aws lambda-microvms list-managed-microvm-image-versions`
   (patrz `terraform/variables.tf`).
 - **`cpu_configurations.architecture`** to enum `"ARM_64"`, nie
   CLI-owe `"arm64"`.
 - **Egress tylko publiczny internet.** Jeśli joby potrzebują dostępu do
-  zasobów w prywatnym VPC, trzeba dodać `awscc_lambda_network_connector` /
-  `aws_lambda_network_connector` (VPC egress) i przekazać go przy
-  `run-microvm`.
+  zasobów w prywatnym VPC, trzeba dodać network connector VPC-egress
+  (`AWS::Lambda::NetworkConnector` w szablonie CloudFormation albo
+  `aws_lambda_network_connector`, gdy provider `aws` go dostanie) i przekazać
+  go przy `run-microvm` - oraz dopisać jego ARN do statementu
+  `PassManagedNetworkConnectors` w `dispatcher.tf`.
 - **Region.** Obecnie tylko `us-east-1`, `us-east-2`, `us-west-2`,
   `eu-west-1`, `ap-northeast-1` - ale patrz punkt niżej, nie wszystkie z nich
   są równo gotowe pod kątem API.
@@ -371,5 +333,5 @@ terraform destroy
 ```
 
 Najpierw `terminate-microvm` dla wszystkich uruchomionych instancji z tego
-obrazu - `awscc_lambda_microvm_image` może odmówić usunięcia, dopóki istnieją
-aktywne MicroVMy.
+obrazu - serwis może odmówić usunięcia obrazu (a więc i stacka
+CloudFormation), dopóki istnieją aktywne MicroVMy.

@@ -152,7 +152,7 @@ resource "aws_lambda_function" "dispatcher" {
   environment {
     variables = {
       WEBHOOK_SECRET_ARN           = aws_secretsmanager_secret.webhook.arn
-      MICROVM_IMAGE_ARN            = awscc_lambda_microvm_image.gh_runner.image_arn
+      MICROVM_IMAGE_ARN            = aws_cloudformation_stack.microvm_image.outputs["ImageArn"]
       MICROVM_EXECUTION_ROLE_ARN   = aws_iam_role.microvm_execution_role.arn
       MICROVM_MAX_DURATION_SECONDS = tostring(var.dispatcher_max_duration_seconds)
       ALLOWED_REPO                 = "${var.github_owner}/${var.github_repo}"
