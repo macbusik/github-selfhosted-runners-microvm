@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Lambda MicroVM image for the ephemeral GitHub Actions runner.
+  Managed via CloudFormation (not the awscc provider) - see MIGRATION_PLAN.md.
+  Static template: all inputs enter as Parameters (no interpolation), so the
+  reviewed file is byte-identical to what is deployed.
+
+Parameters:
+  ImageName:
+    Type: String
+  ImageDescription:
+    Type: String
+  CodeArtifactUri:
+    Type: String
+  BaseImageArn:
+    Type: String
+  BaseImageVersion:
+    # Must be a real version id of the al2023-1 base image - "" is rejected
+    # (unlike omitting --base-image-version in the CLI).
+    Type: String
+  BuildRoleArn:
+    Type: String
+  BaselineMemoryMiB:
+    Type: Number
+  GithubOwner:
+    Type: String
+  GithubRepo:
+    Type: String
+  GhAppSecretArn:
+    Type: String
+  RunnerLabels:
+    Type: String
+  MicrovmAwsRegion:
+    Type: String
+  ProjectTag:
+    Type: String
+
+Resources:
+  MicrovmImage:
+    Type: AWS::Lambda::MicrovmImage
+    Properties:
+      Name: !Ref ImageName
+      Description: !Ref ImageDescription
+      CodeArtifact:
+        Uri: !Ref CodeArtifactUri
+      BaseImageArn: !Ref BaseImageArn
+      BaseImageVersion: !Ref BaseImageVersion
+      BuildRoleArn: !Ref BuildRoleArn
+      CpuConfigurations:
+        - Architecture: ARM_64 # enum value, not CLI-style "arm64"; MicroVMs is ARM64-only today
+      Resources:
+        - MinimumMemoryInMiB: !Ref BaselineMemoryMiB
+      # Phase 1 spike decision point (MIGRATION_PLAN.md): variant A sends
+      # explicit empty arrays - unlike the awscc provider, template
+      # serialization is under our control, so [] is actually transmitted.
+      # If the registry handler still rejects the create with "required key
+      # not found", fall back to variant B: delete these two lines (omitting
+      # optional properties is exactly what the working CLI path does).
+      AdditionalOsCapabilities: []
+      EgressNetworkConnectors: []
+      EnvironmentVariables:
+        - Key: GITHUB_OWNER
+          Value: !Ref GithubOwner
+        - Key: GITHUB_REPO
+          Value: !Ref GithubRepo
+        - Key: GH_APP_SECRET_ARN
+          Value: !Ref GhAppSecretArn
+        - Key: RUNNER_LABELS
+          Value: !Ref RunnerLabels
+        - Key: HOOK_PORT
+          Value: "8080"
+        # AWS_REGION is a reserved env var key server-side (rejected on
+        # create since 2026-07-09, implying the platform injects it).
+        # hook_server.py prefers the platform's AWS_REGION and falls back to
+        # this variable, so we stay correct either way.
+        - Key: MICROVM_AWS_REGION
+          Value: !Ref MicrovmAwsRegion
+      # The API requires at least one enabled hook when Port is set. These
+      # four match hook_server.py exactly; resume/suspend intentionally unset
+      # (ephemeral runners terminate, they don't sleep).
+      Hooks:
+        Port: 8080
+        MicrovmImageHooks:
+          Ready: ENABLED
+          Validate: ENABLED
+        MicrovmHooks:
+          Run: ENABLED
+          # /run does real work before answering (Secrets Manager + two
+          # GitHub API calls + config.sh). The API caps this at 60
+          # (confirmed live 2026-07-10).
+          RunTimeoutInSeconds: 60
+          Terminate: ENABLED
+      Logging: {}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectTag
+
+Outputs:
+  ImageArn:
+    Description: Pass as --image-identifier to run-microvm.
+    Value: !GetAtt MicrovmImage.ImageArn

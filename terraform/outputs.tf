@@ -1,6 +1,6 @@
 output "microvm_image_arn" {
   description = "ARN of the MicroVM image - pass as --image-identifier to run-microvm."
-  value       = awscc_lambda_microvm_image.gh_runner.image_arn
+  value       = aws_cloudformation_stack.microvm_image.outputs["ImageArn"]
 }
 
 output "build_role_arn" {
@@ -42,7 +42,7 @@ output "run_microvm_example_command" {
   description = "MicroVM instances are dynamic runtime resources, not Terraform-managed. This is the CLI call that launches one ephemeral runner from the image above."
   value = join(" ", [
     "aws lambda-microvms run-microvm",
-    "--image-identifier ${awscc_lambda_microvm_image.gh_runner.image_arn}",
+    "--image-identifier ${aws_cloudformation_stack.microvm_image.outputs["ImageArn"]}",
     "--execution-role-arn ${aws_iam_role.microvm_execution_role.arn}",
     "--maximum-duration-in-seconds 14400",
     "--region ${var.aws_region}",

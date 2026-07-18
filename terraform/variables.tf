@@ -34,6 +34,21 @@ variable "runner_labels" {
   default     = "self-hosted,microvm,ephemeral,linux,arm64"
 }
 
+variable "image_generation" {
+  description = <<-EOT
+    Generation segment appended to the MicroVM image name. Bumping it (g2 ->
+    g3 -> ...) is the documented way to roll a new image: the Name change is a
+    CloudFormation *replacement* (new image built, old one deleted in the
+    cleanup step), never an in-place UpdateMicrovmImage. Coexistence of old
+    and new names is also what makes blue/green cutovers and burn-in windows
+    possible - see ../MIGRATION_PLAN.md. Starts at "g2" because the g1-era
+    image (no suffix, awscc/CLI-managed) predates the CloudFormation
+    migration.
+  EOT
+  type        = string
+  default     = "g2"
+}
+
 variable "base_image_version" {
   description = <<-EOT
     Version identifier of the arn:aws:lambda:<region>:aws:microvm-image:al2023-1

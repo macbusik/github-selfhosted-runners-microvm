@@ -1,5 +1,19 @@
 # Migration plan: `awscc` provider → CloudFormation
 
+> **Execution status (2026-07-18):**
+> - **Phase 0 — done.** Local state backed up to
+>   `terraform/terraform.tfstate.pre-cfn-migration-2026-07-18.backup`
+>   (primary worktree, not committed). Old image ARN recorded:
+>   `arn:aws:lambda:us-east-1:191138354216:microvm-image:gh-runner-microvm-sample-cicd-repo`.
+> - **Phase 1 — pending AWS credentials.** Spike not yet run; the template
+>   ships as variant A (explicit `[]`), fallback documented in the template.
+> - **Phase 2 — done** (this commit). `terraform validate` passes; plan
+>   output could not be generated yet (no credentials, state in primary
+>   worktree).
+> - **Phases 3–4 — not started.** Cutover checklist in §3; remember
+>   `terraform state rm awscc_lambda_microvm_image.gh_runner` *before* the
+>   apply.
+
 **Scope:** replace the single `awscc` resource in this repo —
 `awscc_lambda_microvm_image.gh_runner` ([terraform/main.tf](terraform/main.tf)) —
 with a CloudFormation-managed equivalent, and drop the `awscc` provider

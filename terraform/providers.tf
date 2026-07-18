@@ -6,20 +6,12 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.60"
     }
-    awscc = {
-      source = "hashicorp/awscc"
-      # awscc_lambda_microvm_image first shipped in 1.90.0 (2026-06-24),
-      # two days after Lambda MicroVMs itself went GA (2026-06-22). Verified
-      # against provider docs: the resource does not exist in the v1.89.0 tag.
-      version = ">= 1.90.0"
-    }
+    # awscc removed 2026-07: the MicroVM image is now managed through
+    # CloudFormation (aws_cloudformation_stack in main.tf) because of two
+    # confirmed awscc defects - see ../MIGRATION_PLAN.md.
   }
 }
 
 provider "aws" {
-  region = var.aws_region
-}
-
-provider "awscc" {
   region = var.aws_region
 }
