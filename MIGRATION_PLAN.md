@@ -5,8 +5,20 @@
 >   `terraform/terraform.tfstate.pre-cfn-migration-2026-07-18.backup`
 >   (primary worktree, not committed). Old image ARN recorded:
 >   `arn:aws:lambda:us-east-1:191138354216:microvm-image:gh-runner-microvm-sample-cicd-repo`.
-> - **Phase 1 — pending AWS credentials.** Spike not yet run; the template
->   ships as variant A (explicit `[]`), fallback documented in the template.
+> - **Phase 1 — run 2026-07-18, findings:**
+>   1. Schema check passed: every property name in the template matches
+>      `describe-type` output (incl. `MinimumMemoryInMiB`); `Name` is
+>      confirmed createOnly (name change = replacement, as designed).
+>   2. **Variant A is mandatory, variant B is invalid**: the registry schema
+>      marks `AdditionalOsCapabilities`/`EgressNetworkConnectors` (and
+>      `Description`, `Logging`, `Hooks`, `EnvironmentVariables`) as
+>      *required* — that is the root cause of the awscc "required key not
+>      found" error. Explicit `[]` in the template is accepted (create
+>      confirmed live).
+>   3. **New contract discovered**: the CFN handler wants `BaseImageVersion`
+>      as a single major version number (`0`) and rejects the API-normalized
+>      `0.0` the old import path required. Template + variable now enforce
+>      this; `terraform.tfvars` must change `"0.0"` → `"0"` at cutover.
 > - **Phase 2 — done** (this commit). `terraform validate` passes; plan
 >   output could not be generated yet (no credentials, state in primary
 >   worktree).

@@ -15,9 +15,12 @@ Parameters:
   BaseImageArn:
     Type: String
   BaseImageVersion:
-    # Must be a real version id of the al2023-1 base image - "" is rejected
-    # (unlike omitting --base-image-version in the CLI).
+    # Must be a real version of the al2023-1 base image - "" is rejected
+    # (unlike omitting --base-image-version in the CLI). Confirmed live
+    # 2026-07-18: this handler wants a single MAJOR version number ("0") and
+    # rejects the API-normalized "0.0" form the old awscc/import path needed.
     Type: String
+    AllowedPattern: "^[0-9]+$"
   BuildRoleArn:
     Type: String
   BaselineMemoryMiB:
@@ -50,12 +53,13 @@ Resources:
         - Architecture: ARM_64 # enum value, not CLI-style "arm64"; MicroVMs is ARM64-only today
       Resources:
         - MinimumMemoryInMiB: !Ref BaselineMemoryMiB
-      # Phase 1 spike decision point (MIGRATION_PLAN.md): variant A sends
-      # explicit empty arrays - unlike the awscc provider, template
-      # serialization is under our control, so [] is actually transmitted.
-      # If the registry handler still rejects the create with "required key
-      # not found", fall back to variant B: delete these two lines (omitting
-      # optional properties is exactly what the working CLI path does).
+      # SPIKE RESOLVED (2026-07-18, MIGRATION_PLAN.md Phase 1): explicit empty
+      # arrays are not just preferred but MANDATORY - the registry schema
+      # marks both keys as required, which is precisely why the awscc
+      # provider's drop-empty-sets bug produced "required key not found".
+      # Unlike the provider, template serialization is under our control, so
+      # [] is actually transmitted and the create is accepted (confirmed
+      # live). Do NOT remove these lines.
       AdditionalOsCapabilities: []
       EgressNetworkConnectors: []
       EnvironmentVariables:

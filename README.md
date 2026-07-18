@@ -166,11 +166,14 @@ plus read handler zwracający `null` dla prawie wszystkich pól - pełna
 historia i uzasadnienie migracji w `MIGRATION_PLAN.md`.
 
 ```bash
-# base_image_version musi być realną wersją (pusty string jest odrzucany):
+# base_image_version musi być realną wersją (pusty string jest odrzucany).
+# UWAGA na format (potwierdzone 2026-07-18): handler CloudFormation chce
+# POJEDYNCZEGO numeru wersji głównej ("0"), a odrzuca znormalizowaną formę
+# "0.0", której wymagała stara ścieżka awscc/import.
 aws lambda-microvms list-managed-microvm-image-versions \
   --image-identifier arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1
 
-terraform apply -var="base_image_version=<wersja z listy>"   # + owner/repo
+terraform apply -var="base_image_version=0"   # + owner/repo
 
 terraform output microvm_image_arn
 aws lambda-microvms get-microvm-image \

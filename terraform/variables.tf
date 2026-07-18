@@ -51,14 +51,25 @@ variable "image_generation" {
 
 variable "base_image_version" {
   description = <<-EOT
-    Version identifier of the arn:aws:lambda:<region>:aws:microvm-image:al2023-1
-    base image. Cannot be empty - Lambda MicroVMs rejects "" ("latest" is not
-    a valid value here, unlike --base-image-version being omitted in the CLI).
+    Version of the arn:aws:lambda:<region>:aws:microvm-image:al2023-1 base
+    image. Cannot be empty - Lambda MicroVMs rejects "" ("latest" is not a
+    valid value here, unlike --base-image-version being omitted in the CLI).
     Look up the current AVAILABLE version with:
       aws lambda-microvms list-managed-microvm-image-versions \
         --image-identifier arn:aws:lambda:<region>:aws:microvm-image:al2023-1
+    FORMAT (confirmed live 2026-07-18, Phase 1 spike): the CloudFormation
+    handler wants a SINGLE MAJOR VERSION NUMBER ("0"), and rejects the
+    API-normalized "major.minor" form ("0.0") with "Invalid
+    baseMicroVMImageVersion: 0.0. Expected a single major version number
+    (e.g., 1)". This is the opposite of the old awscc/import path, which
+    needed the normalized "0.0" to avoid a phantom diff after import.
   EOT
   type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.base_image_version))
+    error_message = "The CloudFormation handler for AWS::Lambda::MicrovmImage expects a single major version number (e.g. \"0\"), not the API-normalized major.minor form (e.g. \"0.0\")."
+  }
 }
 
 variable "github_app_secret_name" {
