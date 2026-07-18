@@ -5,7 +5,13 @@
 >   `terraform/terraform.tfstate.pre-cfn-migration-2026-07-18.backup`
 >   (primary worktree, not committed). Old image ARN recorded:
 >   `arn:aws:lambda:us-east-1:191138354216:microvm-image:gh-runner-microvm-sample-cicd-repo`.
-> - **Phase 1 — run 2026-07-18, findings:**
+> - **Phase 1 — PASSED 2026-07-18 (verdict: GO).** Full cycle exercised live
+>   against a throwaway stack: create → image `CREATED` with
+>   `latestActiveImageVersion 1.0` and config integrity verified via
+>   `list-microvm-image-versions` (hooks/timeouts/memory/egress all match);
+>   description-only UpdateStack → version 2.0 with **hooks intact** (the
+>   community-reported hook-loss bug did not reproduce); delete-stack →
+>   image confirmed gone (`ResourceNotFoundException`). Findings:
 >   1. Schema check passed: every property name in the template matches
 >      `describe-type` output (incl. `MinimumMemoryInMiB`); `Name` is
 >      confirmed createOnly (name change = replacement, as designed).
@@ -19,9 +25,12 @@
 >      as a single major version number (`0`) and rejects the API-normalized
 >      `0.0` the old import path required. Template + variable now enforce
 >      this; `terraform.tfvars` must change `"0.0"` → `"0"` at cutover.
-> - **Phase 2 — done** (this commit). `terraform validate` passes; plan
->   output could not be generated yet (no credentials, state in primary
->   worktree).
+> - **Phase 2 — done.** `terraform validate` passes. Preview `terraform plan`
+>   generated against a copy of the real state (after `state rm` of the awscc
+>   resource on the copy only): **1 to add** (`aws_cloudformation_stack.
+>   microvm_image` → new `-g2` image), **3 to change in-place** (both IAM
+>   role policies + dispatcher env), **0 to destroy** — old image untouched,
+>   attached to the Phase 2 PR.
 > - **Phases 3–4 — not started.** Cutover checklist in §3; remember
 >   `terraform state rm awscc_lambda_microvm_image.gh_runner` *before* the
 >   apply.
